@@ -1,21 +1,19 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import kagglehub # Library baru
-import os # Untuk mengatur path file
+import kagglehub
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 
 # --- Konfigurasi Halaman ---
-st.set_page_config(page_title="Sistem Pakar Akademik", layout="wide")
+st.set_page_config(page_title="Sistem Pakar Akademik (No School)", layout="wide")
 
-# --- 1. Fungsi Load & Train Model (Updated with KaggleHub) ---
-# --- 1. Fungsi Load & Train Model (Versi Perbaikan) ---
-# --- 1. Fungsi Load & Train Model (FIX SEPARATOR) ---
+# --- 1. Fungsi Load & Train Model (Removed 'school') ---
 @st.cache_resource
 def load_and_train_model():
-    with st.spinner('Sedang mendownload dan mencari dataset...'):
+    with st.spinner('Sedang mendownload dan memproses dataset...'):
         try:
             # 1. Download dataset
             path = kagglehub.dataset_download("larsen0966/student-performance-data-set")
@@ -23,26 +21,20 @@ def load_and_train_model():
             # 2. Cari file csv
             csv_path = None
             for root, dirs, files in os.walk(path):
-                # Kita prioritaskan student-por.csv karena student-mat.csv tadi hilang
                 if "student-por.csv" in files:
                     csv_path = os.path.join(root, "student-por.csv")
                     break
-                # Cadangan jika student-mat muncul lagi
                 elif "student-mat.csv" in files:
                     csv_path = os.path.join(root, "student-mat.csv")
                     break
             
             if csv_path is None:
-                st.error(f"File CSV tidak ditemukan di folder: {path}")
-                return None, None, None
+                st.error("File CSV tidak ditemukan.")
+                return None, None, None, None
 
-            # 3. Baca CSV (PERBAIKAN DISINI)
-            # Hapus sep=';' agar pandas mendeteksi otomatis (biasanya koma)
+            # 3. Baca CSV
             try:
                 df = pd.read_csv(csv_path)
-                
-                # Cek darurat: jika kolomnya ternyata masih salah (misal cuma 1 kolom)
-                # Berarti dia memang butuh titik koma
                 if len(df.columns) <= 1:
                      df = pd.read_csv(csv_path, sep=';')
             except:
@@ -50,134 +42,178 @@ def load_and_train_model():
             
         except Exception as e:
             st.error(f"Terjadi kesalahan: {e}")
-            return None, None, None
+            return None, None, None, None
 
     # --- Preprocessing ---
-    # Kita pastikan kolom yang kita panggil benar-benar ada di dataframe
-    # Kadang nama kolom di kaggle beda dikit (misal huruf besar/kecil)
-    expected_cols = ['sex', 'age', 'studytime', 'failures', 'schoolsup', 
-                     'freetime', 'goout', 'Dalc', 'Walc', 'health', 'absences', 'G1', 'G2', 'G3']
+    # Daftar kolom (Kita SUDAH MENGHAPUS 'school' dari sini)
+    all_columns = [
+        'sex', 'age', 'address', 'famsize', 'Pstatus', 'Medu', 'Fedu', 
+        'Mjob', 'Fjob', 'reason', 'guardian', 'traveltime', 'studytime', 
+        'failures', 'schoolsup', 'famsup', 'paid', 'activities', 'nursery', 
+        'higher', 'internet', 'romantic', 'famrel', 'freetime', 'goout', 
+        'Dalc', 'Walc', 'health', 'absences', 'G1', 'G2', 'G3'
+    ]
     
-    # Validasi kolom tersedia
-    missing_cols = [col for col in expected_cols if col not in df.columns]
-    if missing_cols:
-        st.error(f"Kolom berikut hilang dari dataset: {missing_cols}")
-        st.write("Kolom yang tersedia:", df.columns.tolist())
-        return None, None, None
+    # Filter hanya kolom yang ada
+    available_cols = [col for col in all_columns if col in df.columns]
+    df = df[available_cols].copy()
 
-    selected_features = ['sex', 'age', 'studytime', 'failures', 'schoolsup', 
-                         'freetime', 'goout', 'Dalc', 'Walc', 'health', 'absences', 'G1', 'G2']
+    # Pisahkan Fitur dan Target
+    target_col = 'G3'
+    feature_cols = [c for c in df.columns if c != target_col]
     
-    data = df[selected_features].copy()
-    target = df['G3'] 
+    X = df[feature_cols].copy()
+    y = df[target_col]
 
-    le = LabelEncoder()
-    data['sex'] = le.fit_transform(data['sex']) 
-    data['schoolsup'] = le.fit_transform(data['schoolsup'])
+    # --- Automatic Label Encoding ---
+    encoders = {}
+    
+    for col in X.columns:
+        if X[col].dtype == 'object':
+            le = LabelEncoder()
+            X[col] = le.fit_transform(X[col])
+            encoders[col] = le
 
-    X_train, X_test, y_train, y_test = train_test_split(data, target, test_size=0.2, random_state=42)
+    # Split Data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+    # Train Model
     model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     
     score = model.score(X_test, y_test)
     
-    return model, df, score
+    return model, df, score, encoders
 
-# --- 2. Logika Sistem Pakar (Rule-Based System) ---
-def generate_advice(prediction, studytime, failures, absences, alcohol_consumption):
+# --- 2. Logika Sistem Pakar (Advice) ---
+def generate_advice(prediction, inputs):
     advice = []
     
-    # Aturan 1: Prediksi Nilai
     if prediction < 10:
-        advice.append("⚠️ **PERINGATAN:** Prediksi nilai akhir di bawah standar kelulusan (KKM). Perlu belajar ekstra keras.")
-    elif prediction < 14:
-        advice.append("ℹ️ **INFO:** Anda di jalur aman, tapi tingkatkan lagi untuk nilai A.")
+        advice.append("⚠️ **PERINGATAN KRITIS:** Prediksi nilai akhir di bawah KKM. Risiko tidak lulus tinggi.")
+    elif prediction < 15:
+        advice.append("ℹ️ **INFO:** Nilai cukup aman, namun perlu dorongan untuk mencapai predikat Sangat Baik.")
     else:
-        advice.append("✅ **BAGUS:** Pertahankan kinerja! Potensi nilai A.")
+        advice.append("✅ **EXCELLENT:** Pertahankan ritme belajar ini!")
 
-    # Aturan 2: Waktu Belajar
-    if studytime == 1:
-        advice.append("📚 **Tips Belajar:** Waktu belajar < 2 jam/minggu terlalu sedikit. Coba tambah 30 menit setiap hari.")
+    if inputs['failures'] > 0:
+        advice.append("🔄 **Sejarah Akademik:** Riwayat kegagalan masa lalu mempengaruhi prediksi. Ambil kelas remedial.")
     
-    # Aturan 3: Absensi
-    if absences > 10:
-        advice.append("attendance **Kehadiran:** Absensi Anda tinggi. Ini faktor utama penurunan nilai. Jangan bolos lagi.")
-
-    # Aturan 4: Kegagalan
-    if failures > 0:
-        advice.append("🔄 **Remedial:** Karena ada riwayat gagal sebelumnya, disarankan ambil kelas tambahan.")
-
-    # Aturan 5: Alkohol/Hiburan Malam
-    if alcohol_consumption > 5:
-        advice.append("🍷 **Kesehatan:** Kurangi nongkrong/minum di akhir pekan. Kesehatan fisik berpengaruh ke otak.")
+    if inputs['studytime'] < 2:
+        advice.append("📚 **Waktu Belajar:** Anda belajar kurang dari 2 jam/minggu. Tingkatkan minimal menjadi 5-10 jam.")
+    
+    if inputs['absences'] > 10:
+        advice.append("attendance **Kehadiran:** Tingkat ketidakhadiran sangat tinggi. Ini faktor penentu negatif terbesar.")
+        
+    if inputs['Dalc'] + inputs['Walc'] > 5:
+        advice.append("🍷 **Gaya Hidup:** Konsumsi alkohol cukup tinggi. Kurangi demi fokus dan kesehatan kognitif.")
 
     return advice
 
 # --- 3. UI Utama ---
 def main():
-    st.title("🎓 Prediksi & Panduan Akademik (Kaggle Integrated)")
-    st.markdown("Dataset diambil otomatis dari: *larsen0966/student-performance-data-set*")
+    st.title("🎓 Sistem Pakar Akademik (General)")
+    st.markdown("Prediksi performa siswa tanpa bias sekolah asal.")
     
-    # Load Model
-    model, df, score = load_and_train_model()
+    model, df_raw, score, encoders = load_and_train_model()
 
     if model is not None:
-        st.sidebar.success(f"Model Ready! Akurasi: {score:.2f}")
+        st.sidebar.success(f"Model Accuracy (R²): {score:.2f}")
         
-        st.subheader("Simulasi Data Siswa")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("### 📊 Akademik")
-            g1 = st.number_input("Nilai G1 (Periode 1)", 0, 20, 12)
-            g2 = st.number_input("Nilai G2 (Periode 2)", 0, 20, 12)
-            failures = st.selectbox("Pernah Gagal Pelajaran?", [0, 1, 2, 3])
-            schoolsup = st.selectbox("Ikut Bimbel Sekolah?", ["Tidak", "Ya"])
+        st.subheader("📋 Input Data Siswa")
+        user_input = {}
 
-        with col2:
-            st.markdown("### 🕒 Kebiasaan")
-            studytime = st.selectbox("Waktu Belajar Mingguan", [1, 2, 3, 4], 
-                                     format_func=lambda x: ["<2 Jam", "2-5 Jam", "5-10 Jam", ">10 Jam"][x-1])
-            absences = st.slider("Jumlah Bolos/Absen", 0, 93, 2)
-            goout = st.slider("Sering Keluar Main? (1-5)", 1, 5, 3)
+        tab1, tab2, tab3, tab4 = st.tabs(["🏠 Keluarga", "👤 Personal", "🕒 Gaya Hidup", "📊 Nilai"])
 
-        with col3:
-            st.markdown("### 👤 Personal")
-            sex = st.radio("Gender", ["Pria", "Wanita"])
-            age = st.slider("Umur", 15, 22, 17)
-            freetime = st.slider("Waktu Luang (1-5)", 1, 5, 3)
-            dalc = st.slider("Alkohol (Hari Kerja)", 1, 5, 1)
-            walc = st.slider("Alkohol (Weekend)", 1, 5, 1)
-            health = st.slider("Kesehatan (1-5)", 1, 5, 5)
+        with tab1: # School dihapus, mulai dari Address
+            col1, col2 = st.columns(2)
+            with col1:
+                # 'school' removed here
+                user_input['address'] = st.selectbox("Alamat", df_raw['address'].unique(), format_func=lambda x: "Perkotaan" if x == 'U' else "Pedesaan")
+                user_input['famsize'] = st.selectbox("Ukuran Keluarga", df_raw['famsize'].unique(), format_func=lambda x: ">3 Orang" if x == 'GT3' else "≤3 Orang")
+                user_input['Pstatus'] = st.selectbox("Status Ortu", df_raw['Pstatus'].unique(), format_func=lambda x: "Hidup Bersama" if x == 'T' else "Terpisah")
+                user_input['guardian'] = st.selectbox("Wali Murid", df_raw['guardian'].unique())
+            with col2:
+                user_input['Medu'] = st.slider("Pendidikan Ibu (0-4)", 0, 4, 2)
+                user_input['Fedu'] = st.slider("Pendidikan Ayah (0-4)", 0, 4, 2)
+                user_input['Mjob'] = st.selectbox("Pekerjaan Ibu", df_raw['Mjob'].unique())
+                user_input['Fjob'] = st.selectbox("Pekerjaan Ayah", df_raw['Fjob'].unique())
 
-        if st.button("🚀 Prediksi Hasil Belajar"):
-            # Encoding input
-            sex_enc = 1 if sex == "Pria" else 0
-            sup_enc = 1 if schoolsup == "Ya" else 0
-            
-            # Array Input
-            input_data = np.array([[sex_enc, age, studytime, failures, sup_enc, 
-                                    freetime, goout, dalc, walc, health, absences, g1, g2]])
-            
-            # Prediksi
-            prediction = model.predict(input_data)[0]
-            advice_list = generate_advice(prediction, studytime, failures, absences, (dalc + walc))
+        with tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                user_input['sex'] = st.radio("Gender", df_raw['sex'].unique())
+                user_input['age'] = st.number_input("Umur", 15, 22, 17)
+                user_input['reason'] = st.selectbox("Alasan Memilih Sekolah", df_raw['reason'].unique())
+                user_input['famrel'] = st.slider("Hubungan Keluarga (1-5)", 1, 5, 4)
+                
+            with col2:
+                c1, c2 = st.columns(2)
+                with c1:
+                    user_input['schoolsup'] = st.selectbox("Bimbel Sekolah?", df_raw['schoolsup'].unique())
+                    user_input['famsup'] = st.selectbox("Bimbel Keluarga?", df_raw['famsup'].unique())
+                    user_input['paid'] = st.selectbox("Les Berbayar?", df_raw['paid'].unique())
+                    user_input['activities'] = st.selectbox("Ekskul?", df_raw['activities'].unique())
+                with c2:
+                    user_input['nursery'] = st.selectbox("Pernah TK?", df_raw['nursery'].unique())
+                    user_input['higher'] = st.selectbox("Ingin Kuliah?", df_raw['higher'].unique())
+                    user_input['internet'] = st.selectbox("Akses Internet?", df_raw['internet'].unique())
+                    user_input['romantic'] = st.selectbox("Pacaran?", df_raw['romantic'].unique())
+
+        with tab3:
+            col1, col2 = st.columns(2)
+            with col1:
+                user_input['traveltime'] = st.selectbox("Waktu Perjalanan", [1,2,3,4], format_func=lambda x: ["<15 min", "15-30 min", "30-60 min", ">60 min"][x-1])
+                user_input['studytime'] = st.selectbox("Waktu Belajar", [1,2,3,4], format_func=lambda x: ["<2 Jam", "2-5 Jam", "5-10 Jam", ">10 Jam"][x-1])
+                user_input['failures'] = st.selectbox("Jumlah Kegagalan Lalu", [0, 1, 2, 3])
+                user_input['absences'] = st.number_input("Jumlah Absen/Bolos", 0, 93, 2)
+            with col2:
+                user_input['freetime'] = st.slider("Waktu Luang (1-5)", 1, 5, 3)
+                user_input['goout'] = st.slider("Sering Keluar (1-5)", 1, 5, 3)
+                user_input['Dalc'] = st.slider("Alkohol Weekday (1-5)", 1, 5, 1)
+                user_input['Walc'] = st.slider("Alkohol Weekend (1-5)", 1, 5, 1)
+                user_input['health'] = st.slider("Kesehatan (1-5)", 1, 5, 5)
+
+        with tab4:
+            st.info("Masukkan nilai periode sebelumnya untuk prediksi nilai akhir (G3)")
+            c1, c2 = st.columns(2)
+            user_input['G1'] = c1.number_input("Nilai Periode 1 (G1)", 0, 20, 12)
+            user_input['G2'] = c2.number_input("Nilai Periode 2 (G2)", 0, 20, 12)
+
+        if st.button("🚀 Prediksi Hasil Belajar", type="primary"):
+            input_df = pd.DataFrame([user_input])
+            feature_cols = [c for c in df_raw.columns if c != 'G3']
+            input_df = input_df[feature_cols]
+
+            for col, encoder in encoders.items():
+                if col in input_df.columns:
+                    try:
+                        input_df[col] = encoder.transform(input_df[col])
+                    except:
+                        pass # Handle unseen labels gracefully
+
+            prediction = model.predict(input_df)[0]
+            advice_list = generate_advice(prediction, user_input)
 
             st.divider()
-            c1, c2 = st.columns([1, 2])
+            col_res1, col_res2 = st.columns([1, 2])
             
-            with c1:
-                st.metric("Prediksi Nilai Akhir (G3)", f"{prediction:.2f} / 20")
-                if prediction >= 10:
-                    st.success("LULUS")
+            with col_res1:
+                st.markdown("### Hasil Prediksi")
+                st.metric("Estimasi Nilai Akhir (G3)", f"{prediction:.2f} / 20")
+                st.progress(min(prediction/20, 1.0))
+                
+                if prediction >= 15:
+                    st.success("Sangat Baik (A)")
+                elif prediction >= 10:
+                    st.warning("Lulus (B/C)")
                 else:
-                    st.error("GAGAL")
-            
-            with c2:
-                st.info("### 💡 Rekomendasi Sistem Pakar")
-                for tips in advice_list:
-                    st.write(tips)
+                    st.error("Gagal (D/E)")
+
+            with col_res2:
+                st.markdown("### 💡 Rekomendasi")
+                for item in advice_list:
+                    st.write(item)
 
 if __name__ == "__main__":
     main()
