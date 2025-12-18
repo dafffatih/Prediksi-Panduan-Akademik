@@ -11,27 +11,28 @@ from sklearn.preprocessing import LabelEncoder
 st.set_page_config(page_title="Sistem Pakar Akademik AI", layout="wide", page_icon="🎓")
 
 # --- 1. Fungsi Load & Train Model ---
-@st.cache_resource
+@st.cache_resource  # 1. Caching: Prevents retraining the model on every page interaction (saves time/memory).
 def load_and_train_model(use_grades=True):
     with st.spinner('Sedang memproses dataset & melatih AI...'):
-        # 1. Download & Load Data
+        
+        # --- 1. LOAD DATA ---
+        # Downloads the Portuguese student dataset from Kaggle
         path = kagglehub.dataset_download("larsen0966/student-performance-data-set")
         csv_path = None
         for root, dirs, files in os.walk(path):
             if "student-por.csv" in files:
                 csv_path = os.path.join(root, "student-por.csv"); break
-            elif "student-mat.csv" in files:
-                csv_path = os.path.join(root, "student-mat.csv"); break
         
         try:
             df = pd.read_csv(csv_path)
+            # Check for separator: This dataset often uses ';' instead of ','
             if len(df.columns) <= 1: df = pd.read_csv(csv_path, sep=';')
         except: return None, None, None, None, None, None
 
-        # Simpan salinan data mentah untuk ditampilkan di tabel nanti
+        # Keep a "clean" copy for display in the UI (before we convert text to numbers)
         df_raw_display = df.copy()
 
-        # 2. Filter Kolom
+        # --- 2. FILTER & PREPARE FEATURES ---
         all_columns = [
             'sex', 'age', 'address', 'famsize', 'Pstatus', 'Medu', 'Fedu', 
             'Mjob', 'Fjob', 'reason', 'guardian', 'traveltime', 'studytime', 
@@ -39,33 +40,48 @@ def load_and_train_model(use_grades=True):
             'higher', 'internet', 'romantic', 'famrel', 'freetime', 'goout', 
             'Dalc', 'Walc', 'health', 'absences', 'G1', 'G2', 'G3'
         ]
+        # Only keep columns that actually exist in the file
         available_cols = [col for col in all_columns if col in df.columns]
         
+        # LOGIC FOR "PREDICTION MODE":
+        # If use_grades is False, we drop G1 (1st period grade) and G2 (2nd period).
+        # This allows the model to predict purely based on demographics/habits,
+        # rather than "cheating" by looking at previous exam scores.
         if not use_grades:
             if 'G1' in available_cols: available_cols.remove('G1')
             if 'G2' in available_cols: available_cols.remove('G2')
             
         df = df[available_cols].copy()
 
-        # 3. Preprocessing & Encoding
-        X = df.drop('G3', axis=1)
-        y = df['G3']
+        # --- 3. ENCODING (Text -> Numbers) ---
+        X = df.drop('G3', axis=1) # Features (Input)
+        y = df['G3']              # Target (Output we want to predict)
         train_columns = X.columns.tolist()
 
         encoders = {}
         for col in X.columns:
+            # AI cannot read text like "yes"/"no" or "F"/"M".
+            # LabelEncoder converts them to numbers (e.g., yes=1, no=0).
             if X[col].dtype == 'object':
                 le = LabelEncoder()
                 X[col] = le.fit_transform(X[col])
-                encoders[col] = le
+                encoders[col] = le # Save encoder to translate user input later
 
-        # 4. Training
+        # --- 4. TRAINING ---
+        # Split data: 80% for training, 20% for testing (to check accuracy)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        # Algorithm: RandomForest
+        # Why? It uses multiple decision trees to average results, reducing errors 
+        # and handling complex relationships better than simple linear regression.
         model = RandomForestRegressor(n_estimators=100, random_state=42)
         model.fit(X_train, y_train)
+        
+        # Calculate accuracy (R^2 score) on data the model hasn't seen
         score = model.score(X_test, y_test)
         
-        # 5. Feature Importance
+        # --- 5. EXPLAINABILITY ---
+        # Extracts which factors influenced the prediction the most (e.g., Absences, Study Time)
         feature_importance = pd.DataFrame({
             'Fitur': X.columns,
             'Pentingnya': model.feature_importances_
