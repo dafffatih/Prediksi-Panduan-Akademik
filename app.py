@@ -1,11 +1,13 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import kagglehub
-import os
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
+import streamlit as st             # Framework for building the web interface (UI) and dashboard
+import pandas as pd                # Primary tool for data manipulation (loading CSVs, handling tables)
+import numpy as np                 # Mathematical library for numerical operations (arrays, calculations)
+import kagglehub                   # Utility to download datasets directly from Kaggle
+import os                          # Interact with the operating system (finding file paths, reading directories)
+
+# --- Machine Learning Modules ---
+from sklearn.model_selection import train_test_split  # Helper to split data into Training (80%) and Testing (20%) sets
+from sklearn.ensemble import RandomForestRegressor    # The AI algorithm used for prediction (good for regression tasks)
+from sklearn.preprocessing import LabelEncoder        # Tool to convert text data (e.g., "Male", "Female") into numbers (0, 1)
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(page_title="Sistem Pakar Akademik AI", layout="wide", page_icon="🎓")
